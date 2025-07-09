@@ -3,62 +3,67 @@ import yfinance as yf
 import pandas as pd
 from typing import Literal, Optional
 import json
+import akshare as ak
 
 # 初始化MCP服务器
 mcp = FastMCP("FinancialReportServer")
 
-# @mcp.tool()
-def get_financial_report(
-    stock_code: str,
-    report_type: Literal["income", "balance", "cashflow"],
-    period_type: Literal["yearly", "quarterly"],
-    limit: int = 5
-) -> str:
-    """获取指定股票的财务报表数据，返回JSON格式字符串"""
-    try:
-        ticker = yf.Ticker(stock_code)
+@mcp.tool()
+def get_stock_financial_statement_akshare(symbol, report_table='income', period_type='annual', period=1):
+    """使用akshare获取股票财务报表数据，支持A股和港股
 
-        # 根据报表类型和周期获取数据
-        report_map = {
-            ("income", "yearly"): ticker.financials,
-            ("income", "quarterly"): ticker.quarterly_financials,
-            ("balance", "yearly"): ticker.balance_sheet,
-            ("balance", "quarterly"): ticker.quarterly_balance_sheet,
-            ("cashflow", "yearly"): ticker.cashflow,
-            ("cashflow", "quarterly"): ticker.quarterly_cashflow,
-        }
+    参数:
+        symbol (str): 股票代码，A股格式如'000001.SZ'或'600000.SH'，港股格式如'00700.HK'
+        report_table (str): 报表类型，可选值: 'income' (利润表), 'balance' (资产负债表), 'cash' (现金流量表)
+        period_type (str): 财报周期，可选值: 'annual' (年度), 'quarterly' (季度)
+        period (int): 获取最近几期的数据，默认为1
+    """
 
-        report_data = report_map[(report_type, period_type)]
+    hk_report_type_map = {
+        'income': '利润表',
+        'balance': '资产负债表',
+        'cash': '现金流量表'
+    }
+    hk_period_map = {
+        'annual': '年度',
+        'quarterly': '报告期'
+    }
+    # 验证报表类型和周期参数
+    if report_table not in hk_report_type_map:
+        return f"无效的报表类型: {report_table}，可选值: income, balance, cash"
+    if period_type not in hk_period_map:
+        return f"无效的周期类型: {period_type}，可选值: annual, quarterly"
 
-        # 转置数据并重置索引
-        df = report_data.T.reset_index()
-        df.columns = ["period"] + list(df.columns[1:])
+    df = ak.stock_financial_hk_report_em(
+        stock=symbol.split('.')[0],  # Reverted parameter name to 'stock' to match API
+        symbol=hk_report_type_map[report_table],
+        indicator=hk_period_map[period_type]
+    )
+    
+    # Check if data retrieval failed
+    if df is None:
+        return f"无法获取{symbol}的{hk_report_type_map[report_table]}数据，请检查参数是否正确"
+    
+    if df.empty:
+        return f"未找到{symbol}的{report_table}数据"
 
-        # 限制获取的期数
-        df = df.head(limit)
+    # 取最近period期的数据
+    df = df.head(500)
+    df.to_csv(symbol + "+" + report_table + "_" + period_type + '.csv')
 
-        # 转换为字典并处理数值格式
-        result = {
-            "stock_code": stock_code,
-            "report_type": report_type,
-            "period_type": period_type,
-            "periods": df["period"].tolist(),
-            "data": df.drop("period", axis=1).to_dict(orient="records")
-        }
+    result = {
+        "stock_code": symbol,
+        "report_table": report_table,
+        "period_type": period_type,
+        "periods": period,
+        "data": df.to_dict(orient="records")
+    }
 
-        return json.dumps({
-            "status": "success", 
-            "data": result
-        }, ensure_ascii=False)  # ensure_ascii=False保证中文正常显示
-
-    except Exception as e:
-        return json.dumps({
-            "status": "error",
-            "message": str(e),
-            "hint": "请检查股票代码是否正确，或尝试使用不同的周期类型"
-        }, ensure_ascii=False)
+    return json.dumps({
+        "status": "success", 
+        "data": result
+    }, ensure_ascii=False)
 
 if __name__ == "__main__":
     # 启动MCP服务器，默认端口8000
-    # mcp.run(host="0.0.0.0", port=8000, transport="sse")
-    get_financial_report("APPL", "income", "yearly")
+    mcp.run(host="0.0.0.0", port=8000, transport="sse")
